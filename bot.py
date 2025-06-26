@@ -223,6 +223,32 @@ class Helios:
         hex_str = string.encode('utf-8').hex()
         return hex_str.ljust(64 * 2, '0')
 
+    async def get_current_gas_price(self, web3):
+        """Get current gas price from network and return appropriate max fee and priority fee"""
+        try:
+            # Get current base fee
+            latest_block = web3.eth.get_block('latest')
+            base_fee = latest_block.get('baseFeePerGas', 0)
+            
+            # If base fee is 0 (legacy), get gas price
+            if base_fee == 0:
+                gas_price = web3.eth.gas_price
+                # Set max fee to 1.2x current gas price for safety
+                max_fee = int(gas_price * 1.2)
+                max_priority_fee = int(gas_price * 0.1)  # 10% of gas price
+            else:
+                # For EIP-1559, set max fee to 1.5x base fee for safety
+                max_fee = int(base_fee * 1.5)
+                # Set priority fee to 1.5 gwei or 10% of base fee, whichever is higher
+                max_priority_fee = max(int(web3.to_wei(1.5, "gwei")), int(base_fee * 0.1))
+            
+            return max_fee, max_priority_fee
+        except Exception as e:
+            # Fallback to safe default values
+            max_fee = int(web3.to_wei(10, "gwei"))  # 10 gwei
+            max_priority_fee = int(web3.to_wei(2, "gwei"))  # 2 gwei
+            return max_fee, max_priority_fee
+
     async def perform_bridge(self, account: str, address: str, use_proxy: bool):
         try:
             web3 = await self.get_web3_with_check(address, use_proxy)
@@ -242,8 +268,8 @@ class Helios:
 
             calldata = "0x7ae4a8ff" + encoded_data
 
-            max_priority_fee = web3.to_wei(1.111, "gwei")
-            max_fee = max_priority_fee
+            # Get dynamic gas price instead of fixed values
+            max_fee, max_priority_fee = await self.get_current_gas_price(web3)
 
             tx = {
                 "to": self.BRIDGE_ROUTER_ADDRESS,
@@ -251,8 +277,8 @@ class Helios:
                 "data": calldata,
                 "value": 0,
                 "gas": 1500000,
-                "maxFeePerGas": int(max_fee),
-                "maxPriorityFeePerGas": int(max_priority_fee),
+                "maxFeePerGas": max_fee,
+                "maxPriorityFeePerGas": max_priority_fee,
                 "nonce": web3.eth.get_transaction_count(address, "pending"),
                 "chainId": web3.eth.chain_id
             }
@@ -289,8 +315,8 @@ class Helios:
 
             calldata = "0xf5e56040" + encoded_data.hex()
 
-            max_priority_fee = web3.to_wei(2.5, "gwei")
-            max_fee = web3.to_wei(4.5, "gwei") 
+            # Get dynamic gas price instead of fixed values
+            max_fee, max_priority_fee = await self.get_current_gas_price(web3)
 
             tx = {
                 "to": self.DELEGATE_ROUTER_ADDRESS,
@@ -298,8 +324,8 @@ class Helios:
                 "data": calldata,
                 "value": 0,
                 "gas": 1500000,
-                "maxFeePerGas": int(max_fee),
-                "maxPriorityFeePerGas": int(max_priority_fee),
+                "maxFeePerGas": max_fee,
+                "maxPriorityFeePerGas": max_priority_fee,
                 "nonce": web3.eth.get_transaction_count(address, "pending"),
                 "chainId": web3.eth.chain_id
             }
