@@ -27,17 +27,24 @@ class Helios:
         self.BASE_API = "https://testnet-api.helioschain.network/api"
         self.RPC_URL = "https://testnet1.helioschainlabs.org/"
         self.HLS_CONTRACT_ADDRESS = "0xD4949664cD82660AaE99bEdc034a0deA8A0bd517"
-        self.HLS_HEDGE_VALIDATION = "0x007a1123a54cdD9bA35AD2012DB086b9d8350A5f"
-        self.HLS_PEER_VALIDATION = "0x72a9B3509B19D9Dbc2E0Df71c4A6451e8a3DD705"
-        self.HLS_UNITY_VALIDATION = "0x7e62c5e7Eba41fC8c25e605749C476C0236e0604"
-        self.HLS_SUPRA_VALIDATION = "0x882f8A95409C127f0dE7BA83b4Dfa0096C3D8D79"
-        self.HLS_INTER_VALIDATION = "0xa75a393FF3D17eA7D9c9105d5459769EA3EAEf8D"
+        self.VALIDATION_CONTRACT_ADDRESS = [
+            {"Moniker": "Helios-Hedge", "Contract Address": "0x007a1123a54cdD9bA35AD2012DB086b9d8350A5f"},
+            {"Moniker": "Helios-Peer", "Contract Address": "0x72a9B3509B19D9Dbc2E0Df71c4A6451e8a3DD705"},
+            {"Moniker": "Helios-Unity", "Contract Address": "0x7e62c5e7Eba41fC8c25e605749C476C0236e0604"},
+            {"Moniker": "Helios-Supra", "Contract Address": "0x882f8A95409C127f0dE7BA83b4Dfa0096C3D8D79"},
+            {"Moniker": "Helios-Inter", "Contract Address": "0xa75a393FF3D17eA7D9c9105d5459769EA3EAEf8D"}
+        ]
         self.BRIDGE_ROUTER_ADDRESS = "0x0000000000000000000000000000000000000900"
         self.DELEGATE_ROUTER_ADDRESS = "0x0000000000000000000000000000000000000800"
         self.ERC20_CONTRACT_ABI = json.loads('''[
             {"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"address","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
-            {"type":"function","name":"decimals","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint8"}]}
+            {"type":"function","name":"decimals","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"uint8"}]},
+            {"type":"function","name":"allowance","stateMutability":"view","inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
+            {"type":"function","name":"approve","stateMutability":"nonpayable","inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[{"name":"","type":"bool"}]}
         ]''')
+        self.PAGE_URL = "https://testnet.helioschain.network"
+        self.SITE_KEY = "0x4AAAAAABhz7Yc1no53_eWA"
+        self.CAPTCHA_KEY = None
         self.proxies = []
         self.proxy_index = 0
         self.account_proxies = {}
@@ -62,10 +69,10 @@ class Helios:
     def welcome(self):
         print(
             f"""
-        {Fore.GREEN + Style.BRIGHT}Helios{Fore.BLUE + Style.BRIGHT} Airdrop Agent
+        {Fore.GREEN + Style.BRIGHT}Helios{Fore.BLUE + Style.BRIGHT} Auto BOT
             """
             f"""
-        {Fore.GREEN + Style.BRIGHT} Velhust {Fore.YELLOW + Style.BRIGHT}Thanks for using my script
+        {Fore.GREEN + Style.BRIGHT}Rey? {Fore.YELLOW + Style.BRIGHT}<INI WATERMARK>
             """
         )
 
@@ -73,6 +80,15 @@ class Helios:
         hours, remainder = divmod(seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+    
+    def load_2captcha_key(self):
+        try:
+            with open("2captcha_key.txt", 'r') as file:
+                captcha_key = file.read().strip()
+
+            return captcha_key
+        except Exception as e:
+            return None
     
     async def load_proxies(self, use_proxy_choice: bool):
         filename = "proxy.txt"
@@ -222,36 +238,70 @@ class Helios:
     def encode_string_as_bytes(self, string):
         hex_str = string.encode('utf-8').hex()
         return hex_str.ljust(64 * 2, '0')
-
-    async def get_current_gas_price(self, web3):
-        """Get current gas price from network and return appropriate max fee and priority fee"""
+    
+    async def approving_token(self, account: str, address: str, spender_address: str, contract_address: str, amount: float, use_proxy: bool):
         try:
-            # Get current base fee
-            latest_block = web3.eth.get_block('latest')
-            base_fee = latest_block.get('baseFeePerGas', 0)
+            web3 = await self.get_web3_with_check(address, use_proxy)
             
-            # If base fee is 0 (legacy), get gas price
-            if base_fee == 0:
-                gas_price = web3.eth.gas_price
-                # Set max fee to 1.2x current gas price for safety
-                max_fee = int(gas_price * 1.2)
-                max_priority_fee = int(gas_price * 0.1)  # 10% of gas price
-            else:
-                # For EIP-1559, set max fee to 1.5x base fee for safety
-                max_fee = int(base_fee * 1.5)
-                # Set priority fee to 1.5 gwei or 10% of base fee, whichever is higher
-                max_priority_fee = max(int(web3.to_wei(1.5, "gwei")), int(base_fee * 0.1))
+            spender = web3.to_checksum_address(spender_address)
+            token_contract = web3.eth.contract(address=web3.to_checksum_address(contract_address), abi=self.ERC20_CONTRACT_ABI)
+            decimals = token_contract.functions.decimals().call()
+
+            amount_to_wei = int(amount * (10 ** decimals))
+
+            allowance = token_contract.functions.allowance(address, spender).call()
+            if allowance < amount_to_wei:
+                approve_data = token_contract.functions.approve(spender, amount_to_wei)
+
+                latest_block = web3.eth.get_block("latest")
+                base_fee = latest_block.get("baseFeePerGas", 0)
+                max_priority_fee = web3.to_wei(1.111, "gwei")
+                max_fee = base_fee + max_priority_fee
+
+                approve_tx = approve_data.build_transaction({
+                    "from": address,
+                    "gas": 1500000,
+                    "maxFeePerGas": int(max_fee),
+                    "maxPriorityFeePerGas": int(max_priority_fee),
+                    "nonce": web3.eth.get_transaction_count(address, "pending"),
+                    "chainId": web3.eth.chain_id,
+                })
+
+                signed_tx = web3.eth.account.sign_transaction(approve_tx, account)
+                raw_tx = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+                tx_hash = web3.to_hex(raw_tx)
+                receipt = await asyncio.to_thread(web3.eth.wait_for_transaction_receipt, tx_hash, timeout=300)
+                block_number = receipt.blockNumber
+                
+                explorer = f"https://explorer.helioschainlabs.org/tx/{tx_hash}"
+                
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}   Approve :{Style.RESET_ALL}"
+                    f"{Fore.GREEN+Style.BRIGHT} Success {Style.RESET_ALL}"
+                )
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}   Block   :{Style.RESET_ALL}"
+                    f"{Fore.WHITE+Style.BRIGHT} {block_number} {Style.RESET_ALL}"
+                )
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}   Tx Hash :{Style.RESET_ALL}"
+                    f"{Fore.WHITE+Style.BRIGHT} {tx_hash} {Style.RESET_ALL}"
+                )
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}   Explorer:{Style.RESET_ALL}"
+                    f"{Fore.WHITE+Style.BRIGHT} {explorer} {Style.RESET_ALL}"
+                )
+                await asyncio.sleep(10)
             
-            return max_fee, max_priority_fee
+            return True
         except Exception as e:
-            # Fallback to safe default values
-            max_fee = int(web3.to_wei(10, "gwei"))  # 10 gwei
-            max_priority_fee = int(web3.to_wei(2, "gwei"))  # 2 gwei
-            return max_fee, max_priority_fee
+            raise Exception(f"Approving Token Contract Failed: {str(e)}")
 
     async def perform_bridge(self, account: str, address: str, use_proxy: bool):
         try:
             web3 = await self.get_web3_with_check(address, use_proxy)
+
+            await self.approving_token(account, address, self.BRIDGE_ROUTER_ADDRESS, self.HLS_CONTRACT_ADDRESS, self.bridge_amount, use_proxy)
             
             bridge_amount = web3.to_wei(self.bridge_amount, "ether")
             estimated_fees = int(bridge_amount * 0.1)
@@ -268,8 +318,10 @@ class Helios:
 
             calldata = "0x7ae4a8ff" + encoded_data
 
-            # Get dynamic gas price instead of fixed values
-            max_fee, max_priority_fee = await self.get_current_gas_price(web3)
+            latest_block = web3.eth.get_block("latest")
+            base_fee = latest_block.get("baseFeePerGas", 0)
+            max_priority_fee = web3.to_wei(1.111, "gwei")
+            max_fee = base_fee + max_priority_fee
 
             tx = {
                 "to": self.BRIDGE_ROUTER_ADDRESS,
@@ -277,8 +329,8 @@ class Helios:
                 "data": calldata,
                 "value": 0,
                 "gas": 1500000,
-                "maxFeePerGas": max_fee,
-                "maxPriorityFeePerGas": max_priority_fee,
+                "maxFeePerGas": int(max_fee),
+                "maxPriorityFeePerGas": int(max_priority_fee),
                 "nonce": web3.eth.get_transaction_count(address, "pending"),
                 "chainId": web3.eth.chain_id
             }
@@ -297,7 +349,7 @@ class Helios:
             )
             return None, None
         
-    async def perform_delegate(self, account: str, address: str, validation_address: str, use_proxy: bool):
+    async def perform_delegate(self, account: str, address: str, contract_address: str, use_proxy: bool):
         try:
             web3 = await self.get_web3_with_check(address, use_proxy)
 
@@ -307,7 +359,7 @@ class Helios:
                 ["address", "address", "uint256", "bytes"],
                 [
                     address.lower(),
-                    validation_address.lower(),
+                    contract_address.lower(),
                     delegate_amount,
                     "ahelios".encode("utf-8")
                 ]
@@ -315,17 +367,26 @@ class Helios:
 
             calldata = "0xf5e56040" + encoded_data.hex()
 
-            # Get dynamic gas price instead of fixed values
-            max_fee, max_priority_fee = await self.get_current_gas_price(web3)
+            latest_block = web3.eth.get_block("latest")
+            base_fee = latest_block.get("baseFeePerGas", 0)
+            max_priority_fee = web3.to_wei(2.5, "gwei")
+            max_fee = base_fee + max_priority_fee + web3.to_wei(1, "gwei")
+
+            estimated_gas = await asyncio.to_thread(web3.eth.estimate_gas, {
+                "to": self.DELEGATE_ROUTER_ADDRESS,
+                "from": address,
+                "data": calldata,
+                "value": 0,
+            })
 
             tx = {
                 "to": self.DELEGATE_ROUTER_ADDRESS,
                 "from": address,
                 "data": calldata,
                 "value": 0,
-                "gas": 1500000,
-                "maxFeePerGas": max_fee,
-                "maxPriorityFeePerGas": max_priority_fee,
+                "gas": int(estimated_gas * 1.2),
+                "maxFeePerGas": int(max_fee),
+                "maxPriorityFeePerGas": int(max_priority_fee),
                 "nonce": web3.eth.get_transaction_count(address, "pending"),
                 "chainId": web3.eth.chain_id
             }
@@ -571,6 +632,58 @@ class Helios:
 
         return option, choose, rotate
     
+    async def solve_cf_turnstile(self, proxy=None, retries=5):
+        for attempt in range(retries):
+            connector = ProxyConnector.from_url(proxy) if proxy else None
+            try:
+                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
+
+                    if self.CAPTCHA_KEY is None:
+                        return None
+                    
+                    url = f"http://2captcha.com/in.php?key={self.CAPTCHA_KEY}&method=turnstile&sitekey={self.SITE_KEY}&pageurl={self.PAGE_URL}"
+                    async with session.get(url=url) as response:
+                        response.raise_for_status()
+                        result = await response.text()
+
+                        if 'OK|' not in result:
+                            await asyncio.sleep(5)
+                            continue
+
+                        request_id = result.split('|')[1]
+
+                        self.log(
+                            f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                            f"{Fore.BLUE+Style.BRIGHT}Req Id  :{Style.RESET_ALL}"
+                            f"{Fore.WHITE + Style.BRIGHT} {request_id} {Style.RESET_ALL}"
+                        )
+
+                        for _ in range(30):
+                            res_url = f"http://2captcha.com/res.php?key={self.CAPTCHA_KEY}&action=get&id={request_id}"
+                            async with session.get(url=res_url) as res_response:
+                                res_response.raise_for_status()
+                                res_result = await res_response.text()
+
+                                if 'OK|' in res_result:
+                                    turnstile_token = res_result.split('|')[1]
+                                    return turnstile_token
+                                elif res_result == "CAPCHA_NOT_READY":
+                                    self.log(
+                                        f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                                        f"{Fore.BLUE+Style.BRIGHT}Message :{Style.RESET_ALL}"
+                                        f"{Fore.YELLOW + Style.BRIGHT} Captcha Not Ready {Style.RESET_ALL}"
+                                    )
+                                    await asyncio.sleep(5)
+                                    continue
+                                else:
+                                    break
+
+            except Exception as e:
+                if attempt < retries - 1:
+                    await asyncio.sleep(5)
+                    continue
+                return None
+    
     async def user_login(self, account: str, address: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/users/login"
         data = json.dumps(self.generate_payload(account, address))
@@ -620,22 +733,23 @@ class Helios:
                     await asyncio.sleep(5)
                     continue
                 self.log(
-                    f"{Fore.CYAN+Style.BRIGHT}Message   :{Style.RESET_ALL}"
+                    f"{Fore.CYAN+Style.BRIGHT}Faucet    :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} GET Eligibility Status Failed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
                     f"{Fore.RED+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
                 )
 
         return None
     
-    async def request_faucet(self, address: str, proxy=None, retries=5):
+    async def request_faucet(self, address: str, turnstile_token: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/faucet/request"
-        data = json.dumps({"token":"HLS", "chain":"helios-testnet", "amount":1})
+        data = json.dumps({"token":"HLS", "chain":"helios-testnet", "amount":1, "turnstileToken":turnstile_token})
         headers = {
             **self.headers,
             "Authorization": f"Bearer {self.access_tokens[address]}",
             "Content-Length": str(len(data)),
             "Content-Type": "application/json"
         }
-        await asyncio.sleep(3)
         for attempt in range(retries):
             connector = ProxyConnector.from_url(proxy) if proxy else None
             try:
@@ -648,8 +762,11 @@ class Helios:
                     await asyncio.sleep(5)
                     continue
                 self.log(
-                    f"{Fore.CYAN+Style.BRIGHT}Message   :{Style.RESET_ALL}"
-                    f"{Fore.RED+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                    f"{Fore.BLUE+Style.BRIGHT}Status  :{Style.RESET_ALL}"
+                    f"{Fore.RED+Style.BRIGHT} Not Claimed {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
                 )
 
         return None
@@ -714,8 +831,8 @@ class Helios:
                 f"{Fore.RED+Style.BRIGHT} Perform On-Chain Failed {Style.RESET_ALL}"
             )
 
-    async def process_perform_delegate(self, account: str, address: str, validation_address: str, use_proxy: bool):
-        tx_hash, block_number = await self.perform_delegate(account, address, validation_address, use_proxy)
+    async def process_perform_delegate(self, account: str, address: str, contract_address: str, use_proxy: bool):
+        tx_hash, block_number = await self.perform_delegate(account, address, contract_address, use_proxy)
         if tx_hash and block_number:
             explorer = f"https://explorer.helioschainlabs.org/tx/{tx_hash}"
             self.log(
@@ -748,11 +865,34 @@ class Helios:
             is_eligible = check.get("isEligible", False)
 
             if is_eligible:
-                request = await self.request_faucet(address, proxy)
-                if request and request.get("success", False):
+                self.log(f"{Fore.CYAN+Style.BRIGHT}Faucet    :{Style.RESET_ALL}")
+
+                self.log(
+                    f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                    f"{Fore.YELLOW+Style.BRIGHT}Solving Captcha Turnstile...{Style.RESET_ALL}"
+                )
+
+                turnstile_token = await self.solve_cf_turnstile(proxy)
+                if turnstile_token:
                     self.log(
-                        f"{Fore.CYAN+Style.BRIGHT}Faucet    :{Style.RESET_ALL}"
-                        f"{Fore.GREEN+Style.BRIGHT} 1 HLS Claimed Successfully {Style.RESET_ALL}"
+                        f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                        f"{Fore.BLUE+Style.BRIGHT}Message :{Style.RESET_ALL}"
+                        f"{Fore.GREEN + Style.BRIGHT} Capctha Turnstile Solved Successfully{Style.RESET_ALL}"
+                    )
+
+                    request = await self.request_faucet(address, turnstile_token, proxy)
+                    if request and request.get("success", False):
+                        self.log(
+                            f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                            f"{Fore.BLUE+Style.BRIGHT}Status  :{Style.RESET_ALL}"
+                            f"{Fore.GREEN + Style.BRIGHT} 1 HLS Faucet Claimed Successfully {Style.RESET_ALL}"
+                        )
+
+                else:
+                    self.log(
+                        f"{Fore.MAGENTA+Style.BRIGHT} ● {Style.RESET_ALL}"
+                        f"{Fore.BLUE+Style.BRIGHT}Message :{Style.RESET_ALL}"
+                        f"{Fore.RED + Style.BRIGHT} Capctha Turnstile Not Solved {Style.RESET_ALL}"
                     )
 
             else:
@@ -804,17 +944,9 @@ class Helios:
                 f"{Fore.WHITE+Style.BRIGHT}{self.delegate_count}{Style.RESET_ALL}                                   "
             )
 
-            validation_address = random.choice([
-                self.HLS_HEDGE_VALIDATION, self.HLS_PEER_VALIDATION, self.HLS_UNITY_VALIDATION,
-                self.HLS_SUPRA_VALIDATION, self.HLS_INTER_VALIDATION
-            ])
-            validator_name = (
-                "Helios-Hedge" if validation_address == self.HLS_HEDGE_VALIDATION else 
-                "Helios-Peer" if validation_address == self.HLS_PEER_VALIDATION else 
-                "Helios-Unity" if validation_address == self.HLS_UNITY_VALIDATION else 
-                "Helios-Supra" if validation_address == self.HLS_SUPRA_VALIDATION else 
-                "Helios-Inter"
-            )
+            validation = random.choice(self.VALIDATION_CONTRACT_ADDRESS)
+            moniker = validation["Moniker"]
+            contract_address = validation["Contract Address"]
 
             balance = await self.get_token_balance(address, "HLS", use_proxy)
 
@@ -828,7 +960,7 @@ class Helios:
             )
             self.log(
                 f"{Fore.CYAN+Style.BRIGHT}   Validator:{Style.RESET_ALL}"
-                f"{Fore.WHITE+Style.BRIGHT} {validator_name} {Style.RESET_ALL}"
+                f"{Fore.WHITE+Style.BRIGHT} {moniker} {Style.RESET_ALL}"
             )
 
             if not balance or balance <= self.delegate_amount:
@@ -838,7 +970,7 @@ class Helios:
                 )
                 return
             
-            await self.process_perform_delegate(account, address, validation_address, use_proxy)
+            await self.process_perform_delegate(account, address, contract_address, use_proxy)
             await self.print_timer()
 
     async def process_accounts(self, account: str, address: str, option: int, use_proxy: bool, rotate_proxy: bool):
@@ -868,6 +1000,10 @@ class Helios:
         try:
             with open('accounts.txt', 'r') as file:
                 accounts = [line.strip() for line in file if line.strip()]
+
+            capctha_key = self.load_2captcha_key()
+            if capctha_key:
+                self.CAPTCHA_KEY = capctha_key
 
             option, use_proxy_choice, rotate_proxy = self.print_question()
 
